@@ -27,3 +27,4 @@ colorgrad = "0.6.2"
 bevy_egui = "0.21.0"
 bevy-aabb-instancing = { git = "https://github.com/cantudo/bevy_aabb_instancing.git", branch = "bv_0.11" }
 mining_width_maintainer = { git = "https://github.com/cutlerjake/mining_width_maintainer.git", branch = "main" }
+rfd = "0.12.0"

@@ -1,6 +1,9 @@
 use bevy::{prelude::*, utils::HashMap};
 use bevy_aabb_instancing::{CuboidMaterial, CuboidMaterialMap, COLOR_MODE_RGB};
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{
+    egui::{self, Widget},
+    EguiContexts,
+};
 use itertools::izip;
 use polars::prelude::{CsvReader, SerReader};
 
@@ -10,6 +13,9 @@ use crate::{
     AppState,
 };
 
+#[derive(Event)]
+pub struct ViewAll;
+
 pub fn ui_system(
     mut contexts: EguiContexts,
     block_models: Res<BlockModelDB>,
@@ -18,8 +24,30 @@ pub fn ui_system(
     mut commands: Commands,
     mut material_map: ResMut<CuboidMaterialMap>,
     mut next_state: ResMut<NextState<AppState>>,
+    mut file_dnd: ResMut<FileInputResource>,
+    mut event_writer: EventWriter<ViewAll>,
 ) {
     let ctx = contexts.ctx_mut();
+
+    egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        egui::menu::bar(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Open").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        file_dnd.path_buf = path.clone();
+                        file_dnd.window = None;
+                        next_state.set(AppState::FileInput);
+                    }
+                }
+            });
+        });
+    });
+
+    egui::TopBottomPanel::bottom("Bottom panel").show(ctx, |ui| {
+        if ui.button("View All").clicked() {
+            event_writer.send(ViewAll);
+        }
+    });
 
     egui::SidePanel::left("side_panel").show(ctx, |ui| {
         egui::ComboBox::from_label("Blockmodels")
@@ -95,17 +123,17 @@ pub fn ui_system(
                 }
             }
 
-            ui.separator();
+            // ui.separator();
 
-            if ui.button("Optimize").clicked() {
-                next_state.set(AppState::OptimizeInit);
-            }
+            // if ui.button("Optimize").clicked() {
+            //     next_state.set(AppState::OptimizeInit);
+            // }
         }
     });
 }
 
 #[derive(Resource, Default)]
-pub struct FileDragAndDropResource {
+pub struct FileInputResource {
     pub path_buf: std::path::PathBuf,
     pub window: Option<Entity>,
 }
@@ -113,19 +141,19 @@ pub struct FileDragAndDropResource {
 pub fn detect_file_drop(
     mut next_state: ResMut<NextState<AppState>>,
     mut dnd_evr: EventReader<FileDragAndDrop>,
-    mut file_dnd: ResMut<FileDragAndDropResource>,
+    mut file_dnd: ResMut<FileInputResource>,
 ) {
     for ev in dnd_evr.iter() {
         if let FileDragAndDrop::DroppedFile { path_buf, window } = ev {
             file_dnd.path_buf = path_buf.clone();
             file_dnd.window = Some(window.clone());
-            next_state.set(AppState::FileDrop);
+            next_state.set(AppState::FileInput);
         }
     }
 }
 
 #[derive(Resource, Default)]
-pub struct FileDragAndDropInputResource {
+pub struct FileResource {
     name: String,
     x_col: String,
     y_col: String,
@@ -137,8 +165,8 @@ pub struct FileDragAndDropInputResource {
 
 pub fn file_drop(
     mut contexts: EguiContexts,
-    dnd_data: Res<FileDragAndDropResource>,
-    mut menu_data: ResMut<FileDragAndDropInputResource>,
+    dnd_data: Res<FileInputResource>,
+    mut menu_data: ResMut<FileResource>,
     mut next_state: ResMut<NextState<AppState>>,
     mut bm_res: ResMut<BlockModelResource>,
     mut bm_db: ResMut<BlockModelDB>,
