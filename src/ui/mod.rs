@@ -1,4 +1,4 @@
-use bevy::{prelude::*, utils::HashMap};
+use bevy::{prelude::*, render::view::RenderLayers, utils::HashMap};
 use bevy_aabb_instancing::{CuboidMaterial, CuboidMaterialMap, COLOR_MODE_RGB};
 use bevy_egui::{
     egui::{self, Widget},
@@ -10,11 +10,19 @@ use polars::prelude::{CsvReader, SerReader};
 use crate::{
     block_model::{BlockModel, BlockModelDB, BlockModelResource},
     optimizer::OptimizeParams,
-    AppState,
+    AppState, ColorBarSelectionEvent,
 };
 
 #[derive(Event)]
 pub struct ViewAll;
+
+#[derive(Default, Resource)]
+pub struct OccupiedScreenSpace {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
 
 pub fn ui_system(
     mut contexts: EguiContexts,
@@ -26,110 +34,138 @@ pub fn ui_system(
     mut next_state: ResMut<NextState<AppState>>,
     mut file_dnd: ResMut<FileInputResource>,
     mut event_writer: EventWriter<ViewAll>,
+    mut occupied_screen_space: ResMut<OccupiedScreenSpace>,
+    mut colorbar_event_writer: EventWriter<ColorBarSelectionEvent>,
 ) {
     let ctx = contexts.ctx_mut();
 
-    egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-        egui::menu::bar(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("Open").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().pick_file() {
-                        file_dnd.path_buf = path.clone();
-                        file_dnd.window = None;
-                        next_state.set(AppState::FileInput);
+    let top = egui::TopBottomPanel::top("top_panel")
+        .show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                            file_dnd.path_buf = path.clone();
+                            file_dnd.window = None;
+                            next_state.set(AppState::FileInput);
+                        }
                     }
-                }
+                });
             });
-        });
-    });
+        })
+        .response
+        .rect
+        .height();
 
-    egui::TopBottomPanel::bottom("Bottom panel").show(ctx, |ui| {
-        if ui.button("View All").clicked() {
-            event_writer.send(ViewAll);
-        }
-    });
+    if occupied_screen_space.top != top {
+        occupied_screen_space.top = top;
+    }
 
-    egui::SidePanel::left("side_panel").show(ctx, |ui| {
-        egui::ComboBox::from_label("Blockmodels")
-            .selected_text(selected.clone())
-            .show_ui(ui, |ui| {
-                for (name, _) in block_models.block_models.iter() {
-                    ui.selectable_value(&mut *selected, name.clone(), name.clone());
-                }
-            });
+    let bottom = egui::TopBottomPanel::bottom("Bottom panel")
+        .show(ctx, |ui| {
+            if ui.button("View All").clicked() {
+                event_writer.send(ViewAll);
+            }
+        })
+        .response
+        .rect
+        .height();
 
-        ui.heading("Columns");
-        ui.separator();
-        if *selected != "" {
-            let (ref mut checked, ref mut entities) =
-                checked.entry(selected.clone()).or_insert_with(|| {
-                    (
-                        block_models
-                            .block_models
-                            .get(&*selected)
-                            .unwrap()
-                            .columns
-                            .iter()
-                            .map(|_| false)
-                            .collect::<Vec<_>>(),
-                        vec![
-                            Vec::new();
+    if occupied_screen_space.bottom != bottom {
+        occupied_screen_space.bottom = bottom;
+    }
+
+    let left = egui::SidePanel::left("side_panel")
+        .show(ctx, |ui| {
+            egui::ComboBox::from_label("Blockmodels")
+                .selected_text(selected.clone())
+                .show_ui(ui, |ui| {
+                    for (name, _) in block_models.block_models.iter() {
+                        ui.selectable_value(&mut *selected, name.clone(), name.clone());
+                    }
+                });
+
+            ui.heading("Columns");
+            ui.separator();
+            if *selected != "" {
+                let (ref mut checked, ref mut entities) =
+                    checked.entry(selected.clone()).or_insert_with(|| {
+                        (
                             block_models
                                 .block_models
                                 .get(&*selected)
                                 .unwrap()
                                 .columns
-                                .len()
-                        ],
-                    )
-                });
+                                .iter()
+                                .map(|_| false)
+                                .collect::<Vec<_>>(),
+                            vec![
+                                Vec::new();
+                                block_models
+                                    .block_models
+                                    .get(&*selected)
+                                    .unwrap()
+                                    .columns
+                                    .len()
+                            ],
+                        )
+                    });
 
-            for (col, mut check, ents) in izip!(
-                block_models
-                    .block_models
-                    .get(&*selected)
-                    .unwrap()
-                    .columns
-                    .iter(),
-                checked.iter_mut(),
-                entities.iter_mut()
-            ) {
-                //ui.label(col);
-                if ui.checkbox(&mut check, col).changed() {
-                    if *check == true {
-                        //draw bm
-                        let cuboids_abbb = block_models
-                            .block_models
-                            .get(&*selected)
-                            .unwrap()
-                            .aabb_instances(col.clone(), colorgrad::turbo(), 22500);
+                for (col, mut check, ents) in izip!(
+                    block_models
+                        .block_models
+                        .get(&*selected)
+                        .unwrap()
+                        .columns
+                        .iter(),
+                    checked.iter_mut(),
+                    entities.iter_mut()
+                ) {
+                    //ui.label(col);
+                    if ui.checkbox(&mut check, col).changed() {
+                        if *check == true {
+                            //draw bm
+                            let cuboids_abbb = block_models
+                                .block_models
+                                .get(&*selected)
+                                .unwrap()
+                                .aabb_instances(col.clone(), colorgrad::turbo(), 22500);
 
-                        let material_id = material_map.push(CuboidMaterial {
-                            color_mode: COLOR_MODE_RGB,
-                            ..default()
-                        });
-                        for (cuboids, aabb) in cuboids_abbb.into_iter() {
-                            let mut ent = commands.spawn(SpatialBundle::default());
-                            ent.insert((cuboids, aabb, material_id));
+                            let material_id = material_map.push(CuboidMaterial {
+                                color_mode: COLOR_MODE_RGB,
+                                ..default()
+                            });
+                            for (cuboids, aabb) in cuboids_abbb.into_iter() {
+                                let mut ent = commands.spawn(SpatialBundle::default());
+                                ent.insert((cuboids, aabb, material_id, RenderLayers::layer(0)));
 
-                            ents.push(ent.id());
+                                ents.push(ent.id());
+                            }
+                            colorbar_event_writer.send(ColorBarSelectionEvent {
+                                grid: selected.clone(),
+                                column: col.clone(),
+                            });
+                        } else {
+                            //erase bm
+                            ents.drain(..).for_each(|ent| {
+                                commands.entity(ent).despawn_recursive();
+                            });
+                            colorbar_event_writer.send(ColorBarSelectionEvent {
+                                grid: selected.clone(),
+                                column: col.clone(),
+                            });
                         }
-                    } else {
-                        //erase bm
-                        ents.drain(..).for_each(|ent| {
-                            commands.entity(ent).despawn_recursive();
-                        });
                     }
                 }
             }
+        })
+        .response
+        .rect
+        .width();
 
-            // ui.separator();
-
-            // if ui.button("Optimize").clicked() {
-            //     next_state.set(AppState::OptimizeInit);
-            // }
-        }
-    });
+    if occupied_screen_space.left != left {
+        occupied_screen_space.left = left;
+    }
 }
 
 #[derive(Resource, Default)]
